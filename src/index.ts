@@ -156,30 +156,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 async function runServer() {
   const transport = new StdioServerTransport()
   await server.connect(transport)
-  console.error('RPC MCP Server running on stdio')
-
-  if (!RPC_URL) {
-    throw new Error('RPC_URL is not set')
-  }
-
-  const rpcRequest = {
-    jsonrpc: '2.0',
-    id: 1,
-    method: 'eth_chainId',
-    params: [],
-  }
-
-  const response = await fetch(RPC_URL, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify(rpcRequest),
-  })
-
-  const data = await response.json() as { jsonrpc: string; id: number; result: string }
-  const chainId = parseInt(data.result, 16)
-  console.log(`Running on chain ${chainId}`)
+  console.error('RPC MCP Server running on stdio') 
 }
 
 runServer().catch((error) => {
