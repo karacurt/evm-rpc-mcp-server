@@ -7,10 +7,10 @@ import {z} from 'zod'
 import {zodToJsonSchema} from 'zod-to-json-schema'
 import fetch from 'node-fetch'
 import dotenv from 'dotenv'
-import {BlockNumberSchema, GetBalanceSchema, GetTransactionCountSchema, GetBlockByNumberSchema, GetTransactionByHashSchema, CallSchema, ChainIdSchema} from './zodSchemas.js'
+import {BlockNumberSchema, GetBalanceSchema, GetTransactionCountSchema, GetBlockByNumberSchema, GetTransactionByHashSchema, CallSchema, ChainIdSchema, TraceTransactionSchema} from './zodSchemas.js'
 import { RPC_URL } from './constants.js'
 import { VERSION } from './version.js'
-
+import { formatCallTrace, formatRawTrace } from './helpers.js'
 dotenv.config()
 
 // Create server instance
@@ -64,6 +64,11 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
         name: 'eth_chainId',
         description: 'Get chain ID',
         inputSchema: zodToJsonSchema(ChainIdSchema),
+      },
+      {
+        name: 'trace_transaction',
+        description: 'Trace a transaction execution with detailed steps',
+        inputSchema: zodToJsonSchema(TraceTransactionSchema),
       },
     ],
   }
@@ -119,6 +124,72 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       case 'eth_chainId': {
         params = []
         break
+      }
+      case 'trace_transaction': {
+        const args = request.params.arguments
+        const txHash = args.txHash
+        
+        // First get transaction info to get additional context
+        const txInfoRequest = {
+          jsonrpc: '2.0',
+          id: 1,
+          method: 'eth_getTransactionByHash',
+          params: [txHash],
+        }
+        
+        const txInfoResponse = await fetch(RPC_URL!, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(txInfoRequest),
+        })
+        const txInfoData = await txInfoResponse.json() as any
+        
+        if (!txInfoData.result) {
+          throw new Error(`Transaction ${txHash} not found`)
+        }
+        
+        // Now fetch the trace
+        const traceRequest = {
+          jsonrpc: '2.0',
+          id: 2,
+          method: 'debug_traceTransaction',
+          params: [txHash, {
+            tracer: "callTracer",
+            timeout: "30s",
+          }]
+        }
+        
+        const traceResponse = await fetch(RPC_URL!, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(traceRequest),
+        })
+        const traceData = await traceResponse.json() as any
+        
+        if (!traceData.result) {
+          // If callTracer fails, try standard VM trace
+          const rawTraceRequest = {
+            jsonrpc: '2.0',
+            id: 3,
+            method: 'debug_traceTransaction',
+            params: [txHash, {}]
+          }
+          
+          const rawTraceResponse = await fetch(RPC_URL!, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(rawTraceRequest),
+          })
+          const rawTraceData = await rawTraceResponse.json() as any
+          
+          // Process raw VM trace
+          const formattedTrace = formatRawTrace(rawTraceData.result, txInfoData.result)
+          return { content: [{ type: 'text', text: formattedTrace }] }
+        }
+        
+        // Process callTracer trace which is easier to read
+        const formattedTrace = formatCallTrace(traceData.result, txInfoData.result)
+        return { content: [{ type: 'text', text: formattedTrace }] }
       }
       default:
         throw new Error(`Unknown method: ${request.params.name}`)
