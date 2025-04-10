@@ -182,13 +182,13 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           })
           const rawTraceData = await rawTraceResponse.json() as any
           
-          // Process raw VM trace
-          const formattedTrace = formatRawTrace(rawTraceData.result, txInfoData.result)
+          // Process raw VM trace with enhanced source code and parameter decoding
+          const formattedTrace = await formatRawTrace(rawTraceData.result, txInfoData.result)
           return { content: [{ type: 'text', text: formattedTrace }] }
         }
         
-        // Process callTracer trace which is easier to read
-        const formattedTrace = formatCallTrace(traceData.result, txInfoData.result)
+        // Process callTracer trace with enhanced source code and parameter decoding
+        const formattedTrace = await formatCallTrace(traceData.result, txInfoData.result)
         return { content: [{ type: 'text', text: formattedTrace }] }
       }
       default:

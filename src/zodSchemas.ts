@@ -31,5 +31,4 @@ export const ChainIdSchema = z.object({})
 
 export const TraceTransactionSchema = z.object({
   txHash: z.string().describe('The transaction hash to trace'),
-  fetchSourceCode: z.boolean().optional().describe('Whether to fetch and include source code in the trace output'),
 })
