@@ -263,7 +263,36 @@ export async function decodeFunctionOutput(outputData: string, selector: string,
 
   if (contractData?.functionsBySelector && contractData.functionsBySelector[selector]) {
     const funcInfo = contractData.functionsBySelector[selector]
-    return decodeParameters(outputData, funcInfo.outputs || [])
+    const decoded = decodeParameters(outputData, funcInfo.outputs || [])
+    
+    // Convert to simplified format
+    const simplified: Record<string, any> = {}
+    for (const param of decoded) {
+      if (param.type.endsWith('[]')) {
+        // Handle array types
+        const arrayData = param.value.startsWith('0x') ? param.value.slice(2) : param.value
+        const offset = parseInt(arrayData.slice(0, 64), 16) * 2 // Convert byte offset to hex offset
+        const length = parseInt(arrayData.slice(offset, offset + 64), 16)
+        const values = []
+        
+        // Read array values
+        for (let i = 0; i < length; i++) {
+          const start = offset + 64 + (i * 64)
+          const value = arrayData.slice(start, start + 64)
+          if (param.type.startsWith('address')) {
+            values.push('0x' + value.slice(-40))
+          } else if (param.type.startsWith('uint')) {
+            values.push(BigInt('0x' + value).toString())
+          } else {
+            values.push('0x' + value)
+          }
+        }
+        simplified[param.name] = values
+      } else {
+        simplified[param.name] = param.value
+      }
+    }
+    return simplified
   }
 
   return null
@@ -288,29 +317,97 @@ function getFunctionSignature(funcInfo: any): string {
  * @returns {Array} - Decoded parameters
  */
 function decodeParameters(data: string, types: any[]): any[] {
-  // This is a simplified placeholder
-  // In a real implementation, use proper ABI decoding
+  // Remove 0x prefix if present
+  data = data.startsWith('0x') ? data.slice(2) : data
 
-  // Just return placeholder values based on types
+  // Each parameter takes 32 bytes (64 hex chars)
+  const values: string[] = []
+  for (let i = 0; i < data.length; i += 64) {
+    values.push(data.slice(i, i + 64))
+  }
+
   return types.map((param, index) => {
     const name = param.name || `param${index}`
     const type = param.type
+    const value = values[index] || ''
 
-    // For demo, just show the type and position
-    if (type.includes('address')) {
-      return {name, value: `0x${'1234'.repeat(10)}`, type}
-    } else if (type.includes('uint')) {
-      return {name, value: '123456', type}
-    } else if (type.includes('string')) {
-      return {name, value: 'text', type}
-    } else if (type.includes('bool')) {
-      return {name, value: true, type}
-    } else if (type.includes('bytes')) {
-      return {name, value: '0xabcdef', type}
+    if (type === 'address') {
+      // For addresses, take last 20 bytes (40 chars)
+      return {
+        name,
+        value: '0x' + value.slice(-40),
+        type
+      }
+    } else if (type.startsWith('uint')) {
+      // For uints, convert from hex to decimal
+      try {
+        const decimal = BigInt('0x' + value).toString()
+        return {
+          name,
+          value: decimal,
+          type
+        }
+      } catch (e) {
+        return {
+          name,
+          value: '0',
+          type
+        }
+      }
+    } else if (type === 'bool') {
+      // For bools, check if last byte is 1
+      return {
+        name,
+        value: value.slice(-1) === '1',
+        type
+      }
+    } else if (type.startsWith('bytes')) {
+      // For fixed bytes, take the required number of bytes
+      const size = parseInt(type.slice(5)) || 32
+      return {
+        name,
+        value: '0x' + value.slice(0, size * 2),
+        type
+      }
     } else {
-      return {name, value: '(unknown type)', type}
+      // For other types (arrays, strings, etc), just show hex
+      return {
+        name,
+        value: '0x' + value,
+        type
+      }
     }
   })
+}
+
+/**
+ * Format gas values to be human readable
+ * @param {string} gas - Gas value in hex
+ * @returns {string} - Formatted gas value
+ */
+function formatGas(gas: string): string {
+  return gas ? `${parseInt(gas, 16).toLocaleString()} gas` : ''
+}
+
+/**
+ * Format hex value to be human readable
+ * @param {string} hex - Hex value
+ * @returns {string} - Decoded value
+ */
+function formatHexValue(hex: string): string {
+  if (!hex || !hex.startsWith('0x')) return hex
+  
+  // Remove leading zeros
+  const cleaned = hex.replace(/^0x0*/, '0x')
+  
+  // If it's a number, show decimal
+  try {
+    const decimal = BigInt(hex).toString()
+    return decimal
+  } catch {
+    // If not a valid number, return the full hex
+    return cleaned.toLowerCase()
+  }
 }
 
 /**
@@ -324,16 +421,19 @@ export async function formatCallTrace(trace: any, txInfo: any): Promise<string> 
   
   // Format transaction info
   output += `Transaction: ${txInfo.hash}\n`
-  output += `From: ${txInfo.from}\n`
-  output += `To: ${txInfo.to}\n`
-  output += `Value: ${BigInt(txInfo.value || '0').toString()} wei\n`
-  output += `Gas Limit: ${parseInt(txInfo.gas)}\n`
-  output += `Gas Price: ${parseInt(txInfo.gasPrice)} wei\n\n`
+  output += `From: ${txInfo.from.toLowerCase()}\n`
+  output += `To: ${txInfo.to.toLowerCase()}\n`
+  const valueInWei = BigInt(txInfo.value || '0')
+  const valueInEth = Number(valueInWei) / 1e18
+  output += `Value: ${valueInWei.toString()} wei (${valueInEth} ETH)\n`
+  output += `Gas Limit: ${parseInt(txInfo.gas).toLocaleString()}\n`
+  output += `Gas Price: ${parseInt(txInfo.gasPrice).toLocaleString()} wei\n\n`
 
-  // Get contract data for the initial call
+  // Get contract data and decode initial function call
   const contractData = await fetchContractData(txInfo.to)
-  const initialFunc = formatFunctionCall(txInfo.input.slice(0, 10), contractData?.name)
-  output += `Function: ${initialFunc}\n\n`
+  const initialFuncCall = await decodeFunctionCall(txInfo.input, txInfo.to)
+  const initialFunc = formatFunctionCallWithArgs(initialFuncCall)
+  output += `Initial Call: ${initialFunc}\n\n`
 
   output += '📋 EXECUTION TRACE:\n\n'
 
@@ -344,22 +444,37 @@ export async function formatCallTrace(trace: any, txInfo: any): Promise<string> 
 
     // Get contract data
     const contractData = await fetchContractData(trace.to)
-    const contractName = contractData?.name
+    const contractIdentifier = contractData?.name ? contractData.name : trace.to.toLowerCase()
 
+    // Decode function call
+    const funcCall = await decodeFunctionCall(trace.input || '0x', trace.to)
+    const funcDisplay = formatFunctionCallWithArgs(funcCall)
+    
     // Format the call
     const callType = trace.type || 'CALL'
-    const selector = trace.input?.slice(0, 10)
-    const funcName = selector ? formatFunctionCall(selector, contractName) : ''
-    
-    result += `${indent}${callType} to ${trace.to}`
-    if (funcName) result += ` [${funcName}]`
-    if (trace.gas) result += ` gas: ${trace.gas}`
-    if (trace.gasUsed) result += ` → ${trace.gasUsed}`
+    result += `${indent}${callType} to ${trace.to.toLowerCase()}`
+    if (funcDisplay) {
+      if (contractData?.name) {
+        result += ` [${contractData.name}.${funcDisplay}]`
+      } else {
+        result += ` [${funcDisplay}]`
+      }
+    }
+    if (trace.gas || trace.gasUsed) {
+      const gasUsed = trace.gasUsed ? ` → ${formatGas(trace.gasUsed)}` : ''
+      result += ` (${formatGas(trace.gas)}${gasUsed})`
+    }
     result += '\n'
 
     // Format output if present
-    if (trace.output) {
-      result += `${indent}📤 Output: ${trace.output}\n`
+    if (trace.output && trace.output !== '0x') {
+      const decodedOutput = await decodeFunctionOutput(trace.output, funcCall.rawSelector, trace.to)
+      if (decodedOutput) {
+        result += `${indent}📤 Output: ${JSON.stringify(decodedOutput)}\n`
+      } else {
+        // For non-decodable output, show the full hex value
+        result += `${indent}📤 Output: ${trace.output.toLowerCase()}\n`
+      }
     }
 
     // Format error if present
@@ -379,6 +494,28 @@ export async function formatCallTrace(trace: any, txInfo: any): Promise<string> 
 
   output += await formatTrace(trace)
   return output
+}
+
+/**
+ * Format function call with decoded arguments
+ * @param {any} funcCall - Decoded function call
+ * @returns {string} - Formatted function call with args
+ */
+function formatFunctionCallWithArgs(funcCall: any): string {
+  if (!funcCall || !funcCall.name) return ''
+  
+  // If we have decoded arguments, format them
+  if (funcCall.args && funcCall.args.length > 0) {
+    // Add parameter names if available
+    const namedArgs = funcCall.args.map((arg: any) => 
+      arg.name ? `${arg.name}: ${arg.value}` : arg.value.toString()
+    ).join(', ')
+    
+    return `${funcCall.name}(${namedArgs})`
+  }
+  
+  // Fallback to just the signature if no args
+  return funcCall.signature || funcCall.name
 }
 
 /**
