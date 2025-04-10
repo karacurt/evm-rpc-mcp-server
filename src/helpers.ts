@@ -1,5 +1,5 @@
 import fetch from 'node-fetch'
-import {API_URL} from './constants.js'
+import {API_URL, DEBUG} from './constants.js'
 import { keccak256 } from '@ethersproject/keccak256'
 import { toUtf8Bytes } from '@ethersproject/strings'
 
@@ -27,7 +27,7 @@ const selectorCache: Record<string, string> = {
 export async function fetchContractData(address: string): Promise<any> {
   if (!address) return null
   if (!API_URL) {
-    console.log('API_URL is not set')
+    if(DEBUG) console.log('API_URL is not set')
     return null
   }
 
@@ -46,7 +46,7 @@ export async function fetchContractData(address: string): Promise<any> {
     }
 
     // Build URL for smart contract endpoint
-    console.log(`Fetching contract data for ${address}`, {address})
+    if(DEBUG) console.log(`Fetching contract data for ${address}`, {address})
 
     // Let's try different endpoint formats
     const endpoint = `/smart-contracts/${address}`
@@ -64,20 +64,20 @@ export async function fetchContractData(address: string): Promise<any> {
         ? API_URL + 'v2/'
         : API_URL + '/v2/'
       const url = new URL(endpoint.startsWith('/') ? endpoint.slice(1) : endpoint, baseUrl)
-      console.log(`Trying URL`, {url: url.toString()})
+      if(DEBUG) console.log(`Trying URL`, {url: url.toString()})
 
       // Fetch the contract data
       const response = await fetch(url.toString(), {
         method: 'GET',
         headers: {Accept: 'application/json'},
       })
-      console.log(`Response status`, {status: response.status})
+      if(DEBUG) console.log(`Response status`, {status: response.status})
 
       if (response.ok) {
         responseOk = true
         // Parse the response
         const data = (await response.json()) as any
-        console.log(`Got response`, {keys: Object.keys(data)})
+        if(DEBUG) console.log(`Got response`, {keys: Object.keys(data)})
 
         if (data.abi || (data.result && data.result !== 'Contract source code not verified')) {
           // Found ABI data, process it
@@ -93,7 +93,7 @@ export async function fetchContractData(address: string): Promise<any> {
                 // For real implementation we would use proper keccak256 hashing
                 const selector = getFunctionSelector(item)
                 functionsBySelector[selector] = item
-                console.log(`Added function`, {name: item.name, selector})
+                if(DEBUG) console.log(`Added function`, {name: item.name, selector})
               } else if (item.type === 'event') {
                 const topic = getEventTopic(item)
                 eventsByTopic[topic] = item
@@ -112,7 +112,7 @@ export async function fetchContractData(address: string): Promise<any> {
         }
       }
     } catch (error: any) {
-      console.log(`Error with endpoint`, {endpoint, error: error.message})
+      if(DEBUG) console.log(`Error with endpoint`, {endpoint, error: error.message})
       // Continue to next endpoint
     }
 
@@ -122,16 +122,16 @@ export async function fetchContractData(address: string): Promise<any> {
     }
 
     if (!responseOk) {
-      console.log(`All endpoints failed`, {address})
+      if(DEBUG) console.log(`All endpoints failed`, {address})
     } else {
-      console.log(`No ABI found`, {address})
+      if(DEBUG) console.log(`No ABI found`, {address})
     }
 
     // No ABI found
     contractCache.set(address, null)
     return null
   } catch (error: any) {
-    console.log(`Error fetching contract data`, {address, error: error.message})
+    if(DEBUG) console.log(`Error fetching contract data`, {address, error: error.message})
     return null
   }
 }
@@ -218,7 +218,7 @@ export async function decodeFunctionCall(callData: string, address: string, isDe
   }
 
   const selector = callData.slice(0, 10).toLowerCase()
-  console.log(`Decoding function call`, {selector, address, isDelegate})
+  if(DEBUG) console.log(`Decoding function call`, {selector, address, isDelegate})
 
   // Try to get contract data
   let contractData = await fetchContractData(address)
@@ -237,16 +237,16 @@ export async function decodeFunctionCall(callData: string, address: string, isDe
   }
 
   if (contractData) {
-    console.log(`Contract data found`, {name: contractData.name, address: contractAddress})
-    console.log(`Available function selectors`, {selectors: Object.keys(contractData.functionsBySelector || {})})
+    if(DEBUG) console.log(`Contract data found`, {name: contractData.name, address: contractAddress})
+    if(DEBUG) console.log(`Available function selectors`, {selectors: Object.keys(contractData.functionsBySelector || {})})
   } else {
-    console.log(`No contract data found`, {address: contractAddress})
+    if(DEBUG) console.log(`No contract data found`, {address: contractAddress})
   }
 
   if (contractData?.functionsBySelector && contractData.functionsBySelector[selector]) {
     // We have the full function definition from ABI
     const funcInfo = contractData.functionsBySelector[selector]
-    console.log(`Found function definition`, {selector, name: funcInfo.name})
+    if(DEBUG) console.log(`Found function definition`, {selector, name: funcInfo.name})
 
     // Decode input parameters
     const inputData = callData.slice(10)

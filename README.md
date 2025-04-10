@@ -76,3 +76,4 @@ This configuration will make the following tools available in Cursor:
 - `eth_getBlockByNumber`
 - `eth_getTransactionByHash`
 - `eth_call`
+- `trace_transaction`
