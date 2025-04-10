@@ -6,19 +6,8 @@ import { toUtf8Bytes } from '@ethersproject/strings'
 // Contract data cache to avoid repeated API calls
 const contractCache = new Map()
 
-// Fallback hardcoded signatures for common functions
-const FALLBACK_SIGNATURES: Record<string, string> = {
-  '0xaa57f09c': 'mint(address,address,bytes)',
-  '0x095ea7b3': 'approve(address,uint256)',
-  '0xa9059cbb': 'transfer(address,uint256)',
-  '0x23b872dd': 'transferFrom(address,address,uint256)',
-  '0x70a08231': 'balanceOf(address)',
-  '0xdd62ed3e': 'allowance(address,address)',
-  '0x18160ddd': 'totalSupply()',
-  '0x313ce567': 'decimals()',
-  '0x95d89b41': 'symbol()',
-  '0x06fdde03': 'name()',
-}
+// Implementation address cache for proxy contracts
+const implementationCache = new Map()
 
 // Global cache for function selectors
 const selectorCache: Record<string, string> = {
@@ -194,27 +183,64 @@ function simpleHash(str: string): string {
 }
 
 /**
+ * Get implementation address for a proxy contract
+ * @param {string} proxyAddress - Proxy contract address 
+ * @returns {Promise<string|null>} - Implementation address or null
+ */
+async function getImplementationAddress(proxyAddress: string): Promise<string|null> {
+  if (implementationCache.has(proxyAddress)) {
+    return implementationCache.get(proxyAddress)
+  }
+
+  const contractData = await fetchContractData(proxyAddress)
+  if (!contractData) return null
+
+  // Check if contract has implementations field
+  if (contractData.implementations && contractData.implementations.length > 0) {
+    const impl = contractData.implementations[0]
+    implementationCache.set(proxyAddress, impl)
+    return impl
+  }
+
+  return null
+}
+
+/**
  * Try to get function information for a given call
  * @param {string} callData - Function call data
  * @param {string} address - Contract address
+ * @param {boolean} isDelegate - Whether this is a delegate call
  * @returns {Promise<any>} - Function info including decoded params
  */
-export async function decodeFunctionCall(callData: string, address: string): Promise<any> {
+export async function decodeFunctionCall(callData: string, address: string, isDelegate: boolean = false): Promise<any> {
   if (!callData || callData.length < 10) {
     return {name: 'unknown', signature: 'unknown()', args: []}
   }
 
   const selector = callData.slice(0, 10).toLowerCase()
-  console.log(`Decoding function call`, {selector, address})
+  console.log(`Decoding function call`, {selector, address, isDelegate})
 
   // Try to get contract data
-  const contractData = await fetchContractData(address)
+  let contractData = await fetchContractData(address)
+  let contractAddress = address
+
+  // If this is a proxy contract and we're doing a delegate call
+  if (isDelegate) {
+    const implAddress = await getImplementationAddress(address)
+    if (implAddress) {
+      const implData = await fetchContractData(implAddress)
+      if (implData) {
+        contractData = implData
+        contractAddress = implAddress
+      }
+    }
+  }
 
   if (contractData) {
-    console.log(`Contract data found`, {name: contractData.name, address})
+    console.log(`Contract data found`, {name: contractData.name, address: contractAddress})
     console.log(`Available function selectors`, {selectors: Object.keys(contractData.functionsBySelector || {})})
   } else {
-    console.log(`No contract data found`, {address})
+    console.log(`No contract data found`, {address: contractAddress})
   }
 
   if (contractData?.functionsBySelector && contractData.functionsBySelector[selector]) {
@@ -235,13 +261,10 @@ export async function decodeFunctionCall(callData: string, address: string): Pro
     }
   }
 
-  // Fall back to hardcoded signatures
-  console.log(`Using fallback signature`, {selector})
-  const signature = selector in FALLBACK_SIGNATURES ? FALLBACK_SIGNATURES[selector] : selector
-
+  // If we can't decode it, just return the selector
   return {
-    name: signature.split('(')[0],
-    signature,
+    name: selector,
+    signature: selector,
     args: [],
     rawSelector: selector,
   }
@@ -442,23 +465,24 @@ export async function formatCallTrace(trace: any, txInfo: any): Promise<string> 
     const indent = '  '.repeat(depth)
     let result = ''
 
-    // Get contract data
-    const contractData = await fetchContractData(trace.to)
-    const contractIdentifier = contractData?.name ? contractData.name : trace.to.toLowerCase()
+    // Get contract data for both from and to addresses
+    const toContractData = await fetchContractData(trace.to)
+    const fromContractData = trace.from ? await fetchContractData(trace.from) : null
 
-    // Decode function call
-    const funcCall = await decodeFunctionCall(trace.input || '0x', trace.to)
+    // Get identifiers (name or address)
+    const toIdentifier = toContractData?.name ? toContractData.name : trace.to.toLowerCase()
+    const fromIdentifier = fromContractData?.name ? fromContractData.name : (depth === 0 ? 'Caller' : trace.from?.toLowerCase() || '0x')
+
+    // Decode function call - pass isDelegate flag for DELEGATECALL
+    const isDelegate = trace.type === 'DELEGATECALL'
+    const funcCall = await decodeFunctionCall(trace.input || '0x', trace.to, isDelegate)
     const funcDisplay = formatFunctionCallWithArgs(funcCall)
     
     // Format the call
     const callType = trace.type || 'CALL'
-    result += `${indent}${callType} to ${trace.to.toLowerCase()}`
+    result += `${indent}${callType} from ${fromIdentifier} to ${toIdentifier}`
     if (funcDisplay) {
-      if (contractData?.name) {
-        result += ` [${contractData.name}.${funcDisplay}]`
-      } else {
-        result += ` [${funcDisplay}]`
-      }
+      result += ` [${funcDisplay}]`
     }
     if (trace.gas || trace.gasUsed) {
       const gasUsed = trace.gasUsed ? ` → ${formatGas(trace.gasUsed)}` : ''

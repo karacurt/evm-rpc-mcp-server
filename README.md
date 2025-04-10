@@ -47,7 +47,7 @@ This global installation makes the `rpc-mcp` command available system-wide, whic
 The server uses the following environment variable:
 
 - `RPC_URL`: The RPC endpoint URL to connect to (e.g., 'https://mainnet-rpc.game7.io' or 'https://testnet-rpc.game7.io')
-- `API_URL`: The API endpoint URL to connect to (e.g., 'https://mainnet.game7.io/api' or 'https://testnet.game7.io/api')
+- `API_URL`: The API endpoint URL to connect to (e.g., 'https://mainnet.game7.io/api/v2' or 'https://testnet.game7.io/api/v2')
 
 ### Cursor MCP Configuration
 
